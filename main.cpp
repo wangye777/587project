@@ -6,6 +6,7 @@
 #include <iostream>
 #include <ctime>
 #include <thread>
+#include <algorithm>
 #include <mutex>
 #include <chrono>
 
@@ -13,8 +14,8 @@ using namespace std;
 
 /** parameter **/
 bool debug = true;
-int num_tables = 11;
-int num_threads = 4;
+int num_tables = 20;
+int num_threads = 16;
 
 bool multithread = true;
 
@@ -36,7 +37,7 @@ void test(int val, int id);
 int main() {
 
     //assert num of tables > 1
-    assert(num_tables > 1);
+    //assert(num_tables > 1);
 
     if (num_threads == 1)
     {
