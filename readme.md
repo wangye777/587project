@@ -1,6 +1,8 @@
 cd..
+(..will generate base and skipv)
 
-make (..will generate base and skipv)
+
+	make 
 
 e.g. if adopt ParallelDPEnum method, join 13 tables using 4 threads, Star query
 
