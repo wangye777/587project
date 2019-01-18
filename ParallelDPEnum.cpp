@@ -16,32 +16,35 @@ using namespace std;
 //todo: should use set<> instead of unordered_set<> in memo for fair comparison
 /** parameter **/
 bool debug = true;
-int num_tables = 12;
+int num_tables = 11;
 int num_threads = 4;
 string graphtopo;
 
 bool multithread = true;
 
 /** global variables **/
+vector<string> tables;
 unordered_map<string, double> cost_dict; // (a-c-d) -> 0.875 using sorted order, record the minimum cost only
 mutex mu_cd;
 unordered_map<string, string> helper; // (a-c-d) -> (c-a-d) this is the original order
 mutex mu_h;
-unordered_map<int, std::unordered_set<string> > memo; // 3-> set{(a-c-d), (a-b-d)...} using sorted order
+unordered_map<int, set<string> > memo; // 3-> set{(a-c-d), (a-b-d)...} using sorted order
 mutex mu_memo;
 
 bool intersection(string qep1, string qep2);
 double get_pred_cost(string qep);
 string qep_norm(string qep);
+string get_comb_str(int size, vector<string> tables, int index);
 void multi_plan_join(int size, int thread_id);
+int nchoosek(int n, int k);
 void test(int val, int id);
 
 int main(int argc, char* argv[]) {
 
-    if (argc == 0)
+    if (argc == 1)
     {
         //default: num_tables = 12; num_threads = 4; graphtopo = "Clique"
-        graphtopo = "Star";
+        graphtopo = "Clique";
     }
 
     if (argc == 4)
@@ -55,8 +58,6 @@ int main(int argc, char* argv[]) {
 
     //assert num of tables > 1
     assert(num_tables > 1);
-
-    vector<string> tables;
 
     if (num_threads == 1)
     {
@@ -81,11 +82,7 @@ int main(int argc, char* argv[]) {
     //initialize memo
     int size = 1;
 
-    unordered_set<string> qeps;
-
-    /** time start, clock() is all cpu time **/
-    clock_t begin = clock();
-    auto wall_start = chrono::steady_clock::now();
+    set<string> qeps;
 
     for (int i = 0; i < num_tables; i++)
     {
@@ -100,6 +97,10 @@ int main(int argc, char* argv[]) {
 
     int thread_id = 0;
 
+    /** time start, clock() is all cpu time **/
+    clock_t begin = clock();
+    auto wall_start = chrono::steady_clock::now();
+
     // iteration of size from 2 to num_tables
     for (size = 2; size <= num_tables; size++)
     {
@@ -108,6 +109,7 @@ int main(int argc, char* argv[]) {
         if (!multithread)
         {
             multi_plan_join(size, 0);
+
         } else {
 
             for (thread_id = 0; thread_id < num_threads; thread_id++)
@@ -124,32 +126,35 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (graphtopo == "Clique")
+        if (size == 2)
         {
-            //do nothing
-        } else {
-
-            unordered_set<string> query = memo.at(2);
-
-            unordered_set<string> :: iterator query_itr;
-
-            for (query_itr = query.begin(); query_itr != query.end(); query_itr++)
+            if (graphtopo == "Clique")
             {
-                string q = *query_itr;
+                //do nothing
+            } else {
 
-                if (graphtopo == "Star")
+                set<string> query = memo.at(2);
+
+                set<string> :: iterator query_itr;
+
+                for (query_itr = query.begin(); query_itr != query.end(); query_itr++)
                 {
-                    if (q.at(0) != 'a')
+                    string q = *query_itr;
+
+                    if (graphtopo == "Star")
                     {
-                        query.erase(query_itr);
+                        if (q.at(0) != 'a')
+                        {
+                            query.erase(query_itr);
+                        }
                     }
-                }
 
-                if (graphtopo == "Linear")
-                {
-                    if (q.at(2) - q.at(0) != 1)
+                    if (graphtopo == "Linear")
                     {
-                        query.erase(query_itr);
+                        if (q.at(2) - q.at(0) != 1)
+                        {
+                            query.erase(query_itr);
+                        }
                     }
                 }
             }
@@ -244,8 +249,8 @@ string qep_norm(string qep)
 void multi_plan_join(int size, int thread_id)
 {
     //initialize iterator for smallSZ and largeSZ
-    unordered_set<string> :: iterator smallQS_itr;
-    unordered_set<string> :: iterator largeQS_itr;
+    set<string> :: iterator smallQS_itr;
+    set<string> :: iterator largeQS_itr;
 
     int inner_idx;
     bool mu_cd_flag;
@@ -258,31 +263,44 @@ void multi_plan_join(int size, int thread_id)
         //calculate the size of larger set
         int large_size = size - small_size;
         //get smaller set of qep
-        unordered_set<string> smallQS = memo.at(small_size);
+        set<string> smallQS = memo.at(small_size);
         //get larger set of qep
-        unordered_set<string> largeQS = memo.at(large_size);
+        set<string> largeQS = memo.at(large_size);
 
         int size_largeQS = (int) largeQS.size();
 
-        //int partition_left = thread_id * (size_largeQS / num_threads);
+        int cell_dim = (size_largeQS % num_threads == 0) ? size_largeQS / num_threads : size_largeQS / num_threads + 1;
 
-        //int partition_right = thread_id == num_threads - 1 ? size_largeQS - 1 : (thread_id + 1) * (size_largeQS / num_threads);
+        int partition_left = thread_id * cell_dim;
+
+        int partition_right = thread_id == num_threads - 1 ? size_largeQS - 1 : (thread_id + 1) * cell_dim - 1;
 
         //p_l = partition_left;
         //p_r = partition_right;
 
         for (smallQS_itr = smallQS.begin(); smallQS_itr != smallQS.end(); smallQS_itr++)
         {
-            inner_idx = 0;
+            inner_idx = partition_left;
 
-            for (largeQS_itr = largeQS.begin(); largeQS_itr != largeQS.end(); largeQS_itr++)
+            string par_str = get_comb_str(large_size, tables, partition_left);
+
+            auto start_itr = largeQS.find(par_str);
+
+            //for (largeQS_itr = largeQS.begin(); largeQS_itr != largeQS.end(); largeQS_itr++)
+            for (largeQS_itr = start_itr; inner_idx <= partition_right ; largeQS_itr++)
             {
                 //if (inner_idx < partition_left || inner_idx > partition_right)
-                if (inner_idx % num_threads != thread_id)
-                {
-                    inner_idx++;
-                    continue;
-                }
+//                if (inner_idx < partition_left)
+//                {
+//                    inner_idx++;
+//                    continue;
+//                }
+//
+//                if (inner_idx > partition_right)
+//                {
+//                    break;
+//                }
+                string test = *start_itr;
 
                 inner_idx++;
 
@@ -319,7 +337,7 @@ void multi_plan_join(int size, int thread_id)
                     mu_memo.lock();
                     if (memo.find(size) == memo.end())
                     {
-                        unordered_set<string> tmp_qep_set;
+                        set<string> tmp_qep_set;
 
                         tmp_qep_set.insert(norm_new_qep);
 
@@ -356,6 +374,64 @@ void multi_plan_join(int size, int thread_id)
     {
         cout << "thread:" << thread_id << " finished for size: " << size << " compute: " << cal << endl;
     }
+}
+
+string get_comb_str(int size, vector<string> tables, int index) /**index start from 1*/
+{
+   string res;
+
+    int sum_tmp = 0, dk = 1, dn = 0;
+
+    for (int i = 0; i < size; i++)
+    {
+        int add_tmp = 0;
+
+        while (sum_tmp < index) //todo: <= ?
+        {
+            add_tmp = nchoosek(num_tables - (++dn), size - dk); //todo: optimize
+
+            sum_tmp += add_tmp;
+        }
+
+        if (sum_tmp == index)
+        {
+            dn++;
+        } else {
+            sum_tmp -= add_tmp;
+        }
+
+//        if (size == 1)
+//        {
+//            dn--;
+//        }
+        res.append(tables[dn - 1]);
+
+        if (i < size - 1)
+        {
+            res.append("-");
+        }
+
+        dk++;
+    }
+
+    return res;
+}
+
+int nchoosek(int n, int k)
+{
+    int ans = 1;
+
+    for (int i = 0; i < k; i++)
+    {
+        ans *= (n - i);
+    }
+
+    for (int i = 0; i < k; i++)
+    {
+        ans /= (i + 1);
+    }
+
+    return ans;
 }
 
 void test(int val, int id)

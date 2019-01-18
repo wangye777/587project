@@ -6,6 +6,7 @@
 #include <sstream>
 #include <iostream>
 #include <algorithm>
+#include <iterator>
 #include <ctime>
 #include <thread>
 #include <mutex>
@@ -22,6 +23,7 @@ string graphtopo;
 bool multithread = true;
 
 /** global variables **/
+vector<string> tables;
 unordered_map<string, double> cost_dict; // (a-c-d) -> 0.875 using sorted order, record the minimum cost only
 mutex mu_cd;
 unordered_map<string, string> helper; // (a-c-d) -> (c-a-d) this is the original order
@@ -35,16 +37,19 @@ bool intersection(string qep1, string qep2);
 int intersectionSV(string qep1, string qep2);
 double get_pred_cost(string qep);
 string qep_norm(string qep);
+string get_comb_str(int size, vector<string> tables, int index);
 void multi_plan_join(int size, int thread_id);
 void skip_vector_build(int size, int thread_id);
+void multi_plan_join(int size, int thread_id);
+int nchoosek(int n, int k);
 void test(int val, int id);
 
 int main(int argc, char* argv[]) {
 
-    if (argc == 0)
+    if (argc == 1)
     {
         //default: num_tables = 12; num_threads = 4; graphtopo = "Clique"
-        graphtopo = "Star";
+        graphtopo = "Clique";
     }
 
     if (argc == 4)
@@ -59,7 +64,7 @@ int main(int argc, char* argv[]) {
     //assert num of tables > 1
     assert(num_tables > 1);
 
-    vector<string> tables;
+    //vector<string> tables;
 
     if (num_threads == 1)
     {
@@ -147,32 +152,34 @@ int main(int argc, char* argv[]) {
             }
         }
 
-
-        if (graphtopo == "Clique")
+        if (size == 2)
         {
-            //do nothing
-        } else {
-            set<string> query = memo.at(2);
-
-            set<string> :: iterator query_itr;
-
-            for (query_itr = query.begin(); query_itr != query.end(); query_itr++)
+            if (graphtopo == "Clique")
             {
-                string q = *query_itr;
+                //do nothing
+            } else {
+                set<string> query = memo.at(2);
 
-                if (graphtopo == "Star")
+                set<string> :: iterator query_itr;
+
+                for (query_itr = query.begin(); query_itr != query.end(); query_itr++)
                 {
-                    if (q.at(0) != 'a')
+                    string q = *query_itr;
+
+                    if (graphtopo == "Star")
                     {
-                        query.erase(query_itr);
+                        if (q.at(0) != 'a')
+                        {
+                            query.erase(query_itr);
+                        }
                     }
-                }
 
-                if (graphtopo == "Linear")
-                {
-                    if (q.at(2) - q.at(0) != 1)
+                    if (graphtopo == "Linear")
                     {
-                        query.erase(query_itr);
+                        if (q.at(2) - q.at(0) != 1)
+                        {
+                            query.erase(query_itr);
+                        }
                     }
                 }
             }
@@ -331,21 +338,34 @@ void multi_plan_join(int size, int thread_id)
 
         int size_largeQS = (int) largeQS.size();
 
-        int partition_left = thread_id * (size_largeQS / num_threads);
+        int cell_dim = (size_largeQS % num_threads == 0) ? size_largeQS / num_threads : size_largeQS / num_threads + 1;
 
-        int partition_right = thread_id == num_threads - 1 ? size_largeQS - 1 : (thread_id + 1) * (size_largeQS / num_threads);
+        int partition_left = thread_id * cell_dim;
+
+        int partition_right = thread_id == num_threads - 1 ? size_largeQS - 1 : (thread_id + 1) * cell_dim - 1;
 
         //p_l = partition_left;
         //p_r = partition_right;
 
         for (smallQS_itr = smallQS.begin(); smallQS_itr != smallQS.end(); smallQS_itr++)
         {
-            inner_idx = 0;
+            inner_idx = partition_left;
 
             int skip_num = 0;
 
-            for (largeQS_itr = largeQS.begin(); largeQS_itr != largeQS.end(); largeQS_itr++)
+            string par_str = get_comb_str(large_size, tables, partition_left);
+
+            auto start_itr = largeQS.find(par_str);
+
+            for (largeQS_itr = start_itr; inner_idx <= partition_right; largeQS_itr++)
             {
+                if (skip_num > 0)
+                {
+                    skip_num--;
+                    inner_idx++;
+                    continue;
+                }
+
                 if (inner_idx < partition_left)
                 {
                     inner_idx++;
@@ -355,13 +375,6 @@ void multi_plan_join(int size, int thread_id)
                 if (inner_idx > partition_right)
                 {
                     break;
-                }
-
-                if (skip_num > 0)
-                {
-                    skip_num--;
-                    inner_idx++;
-                    continue;
                 }
 
                 inner_idx++;
@@ -458,7 +471,7 @@ void skip_vector_build(int size, int thread_id)
 
     int right_boundary = (thread_id == num_threads - 1) ? new_qtfr_size - 1 : (thread_id + 1) * (new_qtfr_size / num_threads) - 1;
 
-    int r_counter = new_qtfr_size - 1;
+    int r_counter = right_boundary;
 
     //initialize last_skip_vector
     string last_s = "*";
@@ -467,20 +480,24 @@ void skip_vector_build(int size, int thread_id)
 
     last_sv[0] = right_boundary;
 
-    set<string> :: reverse_iterator ritr;
+    string par_str = get_comb_str(size, tables, right_boundary + 1);
 
-    for (ritr = qtfr_set.rbegin(); ritr != qtfr_set.rend(); ritr++)
+    auto start_itr = qtfr_set.find(par_str);
+
+    set<string> :: reverse_iterator ritr(start_itr);
+
+    for ( ; r_counter >= left_boundary; ritr++)
     {
-        if (r_counter > right_boundary)
-        {
-            r_counter--;
-            continue;
-        }
-
-        if (r_counter < left_boundary)
-        {
-            break;
-        }
+//        if (r_counter > right_boundary)
+//        {
+//            r_counter--;
+//            continue;
+//        }
+//
+//        if (r_counter < left_boundary)
+//        {
+//            break;
+//        }
 
         //cout << *ritr << endl;
         if (skip_vector.find(*ritr) == skip_vector.end()) //no need to check?
@@ -535,6 +552,64 @@ void skip_vector_build(int size, int thread_id)
 
         r_counter--;
     }
+}
+
+string get_comb_str(int size, vector<string> tables, int index) /**index start from 1*/
+{
+    string res;
+
+    int sum_tmp = 0, dk = 1, dn = 0;
+
+    for (int i = 0; i < size; i++)
+    {
+        int add_tmp = 0;
+
+        while (sum_tmp < index) //todo: <= ?
+        {
+            add_tmp = nchoosek(num_tables - (++dn), size - dk); //todo: optimize
+
+            sum_tmp += add_tmp;
+        }
+
+        if (sum_tmp == index)
+        {
+            dn++;
+        } else {
+            sum_tmp -= add_tmp;
+        }
+
+//        if (size == 1)
+//        {
+//            dn--;
+//        }
+        res.append(tables[dn - 1]);
+
+        if (i < size - 1)
+        {
+            res.append("-");
+        }
+
+        dk++;
+    }
+
+    return res;
+}
+
+int nchoosek(int n, int k)
+{
+    int ans = 1;
+
+    for (int i = 0; i < k; i++)
+    {
+        ans *= (n - i);
+    }
+
+    for (int i = 0; i < k; i++)
+    {
+        ans /= (i + 1);
+    }
+
+    return ans;
 }
 
 void test(int val, int id)
